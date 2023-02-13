@@ -1,162 +1,158 @@
-import axios from "axios"
+import axios from "axios";
 
 // initializing axios
 const api = axios.create({
-  baseURL: "http://localhost:3001",
-})
+  baseURL: "http://localhost:8080/upload",
+});
 
 // original source: https://github.com/pilovm/multithreaded-uploader/blob/master/frontend/uploader.js
 export class Uploader {
-  chunkSize: any
-  threadsQuantity: number
-  file: any
-  fileName: any
-  aborted: boolean
-  uploadedSize: number
-  progressCache: any
-  activeConnections: any
-  parts: any[]
-  uploadedParts: any[]
-  fileId: null
-  fileKey: null
-  onProgressFn: (err: any) => void
-  onErrorFn: (err: any) => void
+  chunkSize: any;
+  threadsQuantity: number;
+  file: any;
+  fileName: any;
+  aborted: boolean;
+  uploadedSize: number;
+  progressCache: any;
+  activeConnections: any;
+  parts: any[];
+  uploadedParts: any[];
+  fileId: null;
+  fileKey: null;
+  onProgressFn: (err: any) => void;
+  onErrorFn: (err: any) => void;
   constructor(options: any) {
     // this must be bigger than or equal to 5MB,
     // otherwise AWS will respond with:
     // "Your proposed upload is smaller than the minimum allowed size"
-    this.chunkSize = options.chunkSize || 1024 * 1024 * 5
+    this.chunkSize = options.chunkSize || 1024 * 1024 * 5;
     // number of parallel uploads
-    this.threadsQuantity = Math.min(options.threadsQuantity || 5, 15)
-    this.file = options.file
-    this.fileName = options.fileName
-    this.aborted = false
-    this.uploadedSize = 0
-    this.progressCache = {}
-    this.activeConnections = {}
-    this.parts = []
-    this.uploadedParts = []
-    this.fileId = null
-    this.fileKey = null
-    this.onProgressFn = () => {}
-    this.onErrorFn = () => {}
+    this.threadsQuantity = Math.min(options.threadsQuantity || 5, 15);
+    this.file = options.file;
+    this.fileName = options.fileName;
+    this.aborted = false;
+    this.uploadedSize = 0;
+    this.progressCache = {};
+    this.activeConnections = {};
+    this.parts = [];
+    this.uploadedParts = [];
+    this.fileId = null;
+    this.fileKey = null;
+    this.onProgressFn = () => {};
+    this.onErrorFn = () => {};
   }
 
   // starting the multipart upload request
   start() {
-    this.initialize()
+    this.initialize();
   }
 
   async initialize() {
     try {
-      // adding the the file extension (if present) to fileName
-      let fileName = this.fileName
-      const ext = this.file.name.split(".").pop()
-      if (ext) {
-        fileName += `.${ext}`
-      }
+      let fileName = this.fileName;
 
       // initializing the multipart request
       const videoInitializationUploadInput = {
         name: fileName,
-      }
+      };
       const initializeReponse = await api.request({
         url: "/create-multipart",
         method: "POST",
         data: videoInitializationUploadInput,
-      })
+      });
 
-      const AWSFileDataOutput = initializeReponse.data
-
-      this.fileId = AWSFileDataOutput.UploadId
-      this.fileKey = AWSFileDataOutput.Key
+      const AWSFileDataOutput = initializeReponse.data;
+      console.log(AWSFileDataOutput);
+      this.fileId = AWSFileDataOutput.UploadId;
+      this.fileKey = AWSFileDataOutput.Key;
 
       // retrieving the pre-signed URLs
-      const numberOfparts = Math.ceil(this.file.size / this.chunkSize)
-
-      const AWSMultipartFileDataInput = {
-        uploadId: this.fileId,
-        name: this.fileKey,
-        parts: numberOfparts,
-      }
-
-      const urlsResponse = await api.request({
-        url: "/get-presigned-url",
-        method: "POST",
-        data: AWSMultipartFileDataInput,
-      })
-      
+      const numberOfparts = Math.ceil(this.file.size / this.chunkSize);
 
       const newParts: any[] = [];
       for (let i = 0; i < numberOfparts; i++) {
+        const PartNumber = i + 1;
+
+        const AWSMultipartFileDataInput = {
+          uploadId: this.fileId,
+          name: this.fileKey,
+          partNumber: PartNumber,
+        };
+
+        const urlsResponse = await api.request({
+          url: "/get-presigned-url",
+          method: "POST",
+          data: AWSMultipartFileDataInput,
+        });
+        console.log(urlsResponse.data);
         newParts.push({
           signedUrl: urlsResponse.data,
-          PartNumber: i + 1
-        })
+          PartNumber,
+        });
       }
-      this.parts.push(...newParts)
 
-      this.sendNext()
+      this.parts.push(...newParts);
+
+      this.sendNext();
     } catch (error) {
-      await this.complete(error)
+      await this.complete(error);
     }
   }
 
-  sendNext() {
-    const activeConnections = Object.keys(this.activeConnections).length
-    console.log('this.parts', this.parts);
-    
+  async sendNext() {
+    const activeConnections = Object.keys(this.activeConnections).length;
 
     if (activeConnections >= this.threadsQuantity) {
-      return
+      return;
     }
 
     if (!this.parts.length) {
       if (!activeConnections) {
-        this.complete()
+        this.complete();
       }
 
-      return
+      return;
     }
 
-    const part: any = this.parts.pop()
-    
+    const part: any = this.parts.pop();
     if (this.file && part) {
-      const sentSize = (part.PartNumber - 1) * this.chunkSize
-      const chunk = this.file.slice(sentSize, sentSize + this.chunkSize)
+      const sentSize = (part.PartNumber - 1) * this.chunkSize;
+      const chunk = this.file.slice(sentSize, sentSize + this.chunkSize);
 
       const sendChunkStarted = () => {
-        this.sendNext()
-      }
+        this.sendNext();
+      };
 
+      console.log(`ENVIANDO PARTE ${part.PartNumber}`);
       this.sendChunk(chunk, part, sendChunkStarted)
         .then(() => {
-          this.sendNext()
+          console.log(`PARTE ${part.PartNumber} ENVIADA`);
+          this.sendNext();
         })
         .catch((error) => {
-          this.parts.push(part)
+          this.parts.push(part);
 
-          this.complete(error)
-        })
+          this.complete(error);
+        });
     }
   }
 
   // terminating the multipart upload request on success or failure
   async complete(error?: any) {
     if (error && !this.aborted) {
-      this.onErrorFn(error)
-      return
+      this.onErrorFn(error);
+      return;
     }
 
     if (error) {
-      this.onErrorFn(error)
-      return
+      this.onErrorFn(error);
+      return;
     }
 
     try {
-      await this.sendCompleteRequest()
+      await this.sendCompleteRequest();
     } catch (error) {
-      this.onErrorFn(error)
+      this.onErrorFn(error);
     }
   }
 
@@ -164,17 +160,21 @@ export class Uploader {
   // the finalization API
   async sendCompleteRequest() {
     if (this.fileId && this.fileKey) {
+      this.uploadedParts.sort((n1, n2) =>
+        n1.PartNumber < n2.PartNumber ? -1 : 1
+      );
+
       const videoFinalizationMultiPartInput = {
         UploadId: this.fileId,
         Key: this.fileKey,
         parts: this.uploadedParts,
-      }
+      };
 
       await api.request({
         url: "/complete-multipart",
         method: "POST",
         data: videoFinalizationMultiPartInput,
-      })
+      });
     }
   }
 
@@ -182,48 +182,52 @@ export class Uploader {
     return new Promise((resolve, reject) => {
       this.upload(chunk, part, sendChunkStarted)
         .then((status) => {
-          console.log('status', status);
-          
+          console.log("status", status);
+
           if (status !== 200) {
-            reject(new Error("Failed chunk upload"))
-            return
+            reject(new Error("Failed chunk upload"));
+            return;
           }
 
-          resolve(1)
+          resolve(1);
         })
         .catch((error) => {
-          reject(error)
-        })
-    })
+          reject(error);
+        });
+    });
   }
 
   // calculating the current progress of the multipart upload request
   handleProgress(part: any, event: any) {
     if (this.file) {
-      if (event.type === "progress" || event.type === "error" || event.type === "abort") {
-        this.progressCache[part] = event.loaded
+      if (
+        event.type === "progress" ||
+        event.type === "error" ||
+        event.type === "abort"
+      ) {
+        this.progressCache[part] = event.loaded;
       }
 
       if (event.type === "uploaded") {
-        this.uploadedSize += this.progressCache[part] || 0
-        delete this.progressCache[part]
+        this.uploadedSize += this.progressCache[part] || 0;
+        delete this.progressCache[part];
       }
 
       const inProgress = Object.keys(this.progressCache)
         .map(Number)
-        .reduce((memo, id) => (memo += this.progressCache[id]), 0)
+        .reduce((memo, id) => (memo += this.progressCache[id]), 0);
 
-      const sent = Math.min(this.uploadedSize + inProgress, this.file.size)
+      const sent = Math.min(this.uploadedSize + inProgress, this.file.size);
 
-      const total = this.file.size
+      const total = this.file.size;
 
-      const percentage = Math.round((sent / total) * 100)
+      const percentage = Math.round((sent / total) * 100);
 
       this.onProgressFn({
         sent: sent,
         total: total,
         percentage: percentage,
-      })
+      });
     }
   }
 
@@ -233,73 +237,78 @@ export class Uploader {
     return new Promise((resolve, reject) => {
       if (this.fileId && this.fileKey) {
         // - 1 because PartNumber is an index starting from 1 and not 0
-        const xhr = (this.activeConnections[part.PartNumber - 1] = new XMLHttpRequest())
+        const xhr = (this.activeConnections[part.PartNumber - 1] =
+          new XMLHttpRequest());
 
-        sendChunkStarted()
+        sendChunkStarted();
 
-        const progressListener = this.handleProgress.bind(this, part.PartNumber - 1)
+        const progressListener = this.handleProgress.bind(
+          this,
+          part.PartNumber - 1
+        );
 
-        xhr.upload.addEventListener("progress", progressListener)
+        xhr.upload.addEventListener("progress", progressListener);
 
-        xhr.addEventListener("error", progressListener)
-        xhr.addEventListener("abort", progressListener)
-        xhr.addEventListener("loadend", progressListener)
+        xhr.addEventListener("error", progressListener);
+        xhr.addEventListener("abort", progressListener);
+        xhr.addEventListener("loadend", progressListener);
 
-        xhr.open("PUT", part.signedUrl)
+        console.log(part.signedUrl);
+
+        xhr.open("PUT", part.signedUrl);
 
         xhr.onreadystatechange = () => {
           if (xhr.readyState === 4 && xhr.status === 200) {
-            // retrieving the ETag parameter from the HTTP headers
-            const ETag = xhr.getResponseHeader("ETag")
-
+            console.log(xhr);
+            const ETag = xhr.getResponseHeader("ETag");
+            console.log(ETag);
             if (ETag) {
               const uploadedPart = {
                 PartNumber: part.PartNumber,
                 // removing the " enclosing carachters from
                 // the raw ETag
                 ETag: ETag.replaceAll('"', ""),
-              }
+              };
 
-              this.uploadedParts.push(uploadedPart)
-
-              resolve(xhr.status)
-              delete this.activeConnections[part.PartNumber - 1]
+              this.uploadedParts.push(uploadedPart);
+              resolve(xhr.status);
+              delete this.activeConnections[part.PartNumber - 1];
             }
           }
-        }
+        };
 
         xhr.onerror = (error) => {
-          reject(error)
-          delete this.activeConnections[part.PartNumber - 1]
-        }
+          reject(error);
+          delete this.activeConnections[part.PartNumber - 1];
+        };
 
         xhr.onabort = () => {
-          reject(new Error("Upload canceled by user"))
-          delete this.activeConnections[part.PartNumber - 1]
-        }
+          reject(new Error("Upload canceled by user"));
+          delete this.activeConnections[part.PartNumber - 1];
+        };
 
-        xhr.send(file)
+        xhr.send(file);
       }
-    })
+    });
   }
 
   onProgress(onProgress: any) {
-    this.onProgressFn = onProgress
-    return this
+    this.onProgressFn = onProgress;
+    return this;
   }
 
   onError(onError: any) {
-    this.onErrorFn = onError
-    return this
+    this.onErrorFn = onError;
+    return this;
   }
 
   abort() {
     Object.keys(this.activeConnections)
       .map(Number)
       .forEach((id) => {
-        this.activeConnections[id].abort()
-      })
+        this.activeConnections[id].abort();
+      });
 
-    this.aborted = true
+    this.aborted = true;
   }
 }
